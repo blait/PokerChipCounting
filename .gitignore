@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+sam3env/
+venv/
+.venv/
+
+# SAM3 source (upstream dependency, not our code)
+sam3/
+
+# Video files (too large for git)
+*.mp4
+*.avi
+*.mov
+pokervideo/
+
+# Image files (debug outputs)
+*.png
+*.jpg
+*.jpeg
+
+# Run outputs
+sam3-runs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Claude Code
+.claude/

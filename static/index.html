@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SAM3 Chip Counter</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; padding: 20px; }
+h1 { font-size: 1.4em; margin-bottom: 16px; color: #64ffda; }
+.container { max-width: 1200px; margin: 0 auto; display: grid; grid-template-columns: 1fr 320px; gap: 20px; }
+.main { display: flex; flex-direction: column; gap: 16px; }
+.sidebar { display: flex; flex-direction: column; gap: 16px; }
+
+.card { background: #16213e; border-radius: 8px; padding: 16px; border: 1px solid #0f3460; }
+.card h2 { font-size: 0.9em; color: #64ffda; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
+
+.controls-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.controls-row select, .controls-row input[type="text"] { background: #0f3460; border: 1px solid #1a4080; color: #eee; padding: 8px 12px; border-radius: 4px; font-size: 0.9em; }
+.controls-row select { min-width: 180px; }
+.controls-row input[type="text"] { flex: 1; min-width: 200px; }
+
+.btn { padding: 8px 20px; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 0.9em; transition: all 0.2s; }
+.btn-run { background: #64ffda; color: #1a1a2e; }
+.btn-run:hover { background: #4dd0b0; }
+.btn-run:disabled { background: #333; color: #666; cursor: not-allowed; }
+.btn-cancel { background: #ff6b6b; color: #fff; }
+.btn-cancel:hover { background: #ee5a5a; }
+
+.canvas-wrapper { position: relative; background: #000; border-radius: 8px; overflow: hidden; aspect-ratio: 16/9; }
+.canvas-wrapper img { width: 100%; height: 100%; object-fit: contain; }
+.canvas-placeholder { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; color: #666; font-size: 1.2em; }
+
+.progress-bar { width: 100%; height: 6px; background: #0f3460; border-radius: 3px; overflow: hidden; }
+.progress-bar .fill { height: 100%; background: #64ffda; transition: width 0.1s; }
+.progress-info { display: flex; justify-content: space-between; font-size: 0.8em; color: #aaa; margin-top: 4px; }
+
+.slider-group { margin-bottom: 12px; }
+.slider-label { display: flex; justify-content: space-between; font-size: 0.8em; margin-bottom: 4px; }
+.slider-label span:first-child { color: #ccc; }
+.slider-label span:last-child { color: #64ffda; font-weight: 600; }
+input[type="range"] { width: 100%; height: 4px; -webkit-appearance: none; background: #0f3460; border-radius: 2px; outline: none; }
+input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #64ffda; cursor: pointer; }
+
+.results-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.result-item { text-align: center; padding: 8px; background: #0f3460; border-radius: 4px; }
+.result-item .value { font-size: 1.4em; font-weight: 700; color: #64ffda; }
+.result-item .label { font-size: 0.7em; color: #aaa; margin-top: 2px; }
+
+.history-table { width: 100%; border-collapse: collapse; font-size: 0.75em; }
+.history-table th { text-align: left; padding: 6px 8px; border-bottom: 1px solid #0f3460; color: #64ffda; }
+.history-table td { padding: 6px 8px; border-bottom: 1px solid #0f3460; }
+.history-table tr:hover { background: #0f3460; }
+.history-table a { color: #64ffda; text-decoration: none; }
+
+.status-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.75em; font-weight: 600; }
+.status-idle { background: #2d4a3e; color: #64ffda; }
+.status-running { background: #4a3d2d; color: #ffd964; }
+.status-loading { background: #4a2d2d; color: #ff6b6b; }
+
+@media (max-width: 900px) {
+  .container { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<h1>SAM3 Chip Counter <span id="statusBadge" class="status-badge status-loading">loading</span></h1>
+
+<div class="container">
+  <div class="main">
+    <div class="card">
+      <div class="controls-row">
+        <select id="videoSelect"></select>
+        <input type="text" id="promptInput" value="stack of poker chips" placeholder="Prompt...">
+        <button class="btn btn-run" id="runBtn" disabled>Run</button>
+        <button class="btn btn-cancel" id="cancelBtn" style="display:none">Cancel</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="canvas-wrapper">
+        <img id="frameImg" style="display:none">
+        <div class="canvas-placeholder" id="placeholder">Press Run to start</div>
+      </div>
+      <div class="progress-bar"><div class="fill" id="progressFill" style="width:0%"></div></div>
+      <div class="progress-info">
+        <span id="frameInfo">Frame 0/0</span>
+        <span id="elapsedInfo">0.0s</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Results</h2>
+      <div class="results-grid">
+        <div class="result-item"><div class="value" id="resUnique">-</div><div class="label">Unique Objects</div></div>
+        <div class="result-item"><div class="value" id="resAvg">-</div><div class="label">Avg/Frame</div></div>
+        <div class="result-item"><div class="value" id="resMax">-</div><div class="label">Max/Frame</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>History</h2>
+      <table class="history-table">
+        <thead><tr><th>#</th><th>Prompt</th><th>score</th><th>new_det</th><th>nms</th><th>Unique</th><th>Avg</th><th>Time</th><th></th></tr></thead>
+        <tbody id="historyBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="sidebar">
+    <div class="card">
+      <h2>Thresholds</h2>
+      <div id="slidersContainer"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const SLIDER_CONFIG = [
+  { key: "score_threshold_detection", label: "Score Threshold", min: 0.01, max: 0.9, step: 0.01 },
+  { key: "new_det_thresh", label: "New Detection Thresh", min: 0.1, max: 0.95, step: 0.01 },
+  { key: "assoc_iou_thresh", label: "Assoc IoU Thresh", min: 0.01, max: 0.7, step: 0.01 },
+  { key: "det_nms_thresh", label: "Det NMS Thresh", min: 0.01, max: 0.7, step: 0.01 },
+  { key: "max_trk_keep_alive", label: "Max Track Keep Alive", min: 5, max: 120, step: 1 },
+  { key: "init_trk_keep_alive", label: "Init Track Keep Alive", min: 5, max: 120, step: 1 },
+  { key: "hotstart_delay", label: "Hotstart Delay", min: 0, max: 60, step: 1 },
+  { key: "suppress_overlapping_based_on_recent_occlusion_threshold", label: "Suppress Overlap", min: 0.0, max: 1.0, step: 0.01 },
+  { key: "recondition_every_nth_frame", label: "Recondition Every N", min: 1, max: 64, step: 1 },
+];
+
+let ws = null;
+let currentThresholds = {};
+
+// Initialize sliders
+function buildSliders(values) {
+  const container = document.getElementById('slidersContainer');
+  container.innerHTML = '';
+  SLIDER_CONFIG.forEach(cfg => {
+    const val = values[cfg.key] !== undefined ? values[cfg.key] : cfg.min;
+    currentThresholds[cfg.key] = val;
+    const div = document.createElement('div');
+    div.className = 'slider-group';
+    div.innerHTML = `
+      <div class="slider-label"><span>${cfg.label}</span><span id="val_${cfg.key}">${formatVal(val, cfg.step)}</span></div>
+      <input type="range" id="sl_${cfg.key}" min="${cfg.min}" max="${cfg.max}" step="${cfg.step}" value="${val}">
+    `;
+    container.appendChild(div);
+    const slider = div.querySelector('input');
+    slider.addEventListener('input', () => {
+      const v = parseFloat(slider.value);
+      document.getElementById(`val_${cfg.key}`).textContent = formatVal(v, cfg.step);
+      currentThresholds[cfg.key] = v;
+    });
+    slider.addEventListener('change', () => {
+      updateThresholds({ [cfg.key]: parseFloat(slider.value) });
+    });
+  });
+}
+
+function formatVal(v, step) {
+  return step < 1 ? v.toFixed(2) : Math.round(v).toString();
+}
+
+async function updateThresholds(partial) {
+  await fetch('/api/thresholds', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(partial),
+  });
+}
+
+// Load videos
+async function loadVideos() {
+  const resp = await fetch('/api/videos');
+  const data = await resp.json();
+  const sel = document.getElementById('videoSelect');
+  sel.innerHTML = '';
+  data.videos.forEach(v => {
+    const opt = document.createElement('option');
+    opt.value = v.path;
+    opt.textContent = v.name;
+    if (v.path === data.current) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  sel.addEventListener('change', async () => {
+    const resp = await fetch('/api/video', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: sel.value }),
+    });
+    const r = await resp.json();
+    if (r.status === 'ok') {
+      setStatus('idle');
+    }
+  });
+}
+
+// Load thresholds
+async function loadThresholds() {
+  const resp = await fetch('/api/thresholds');
+  const data = await resp.json();
+  buildSliders(data);
+}
+
+// Load history
+async function loadHistory() {
+  const resp = await fetch('/api/history');
+  const data = await resp.json();
+  renderHistory(data.runs);
+}
+
+function renderHistory(runs) {
+  const tbody = document.getElementById('historyBody');
+  tbody.innerHTML = '';
+  runs.slice().reverse().forEach((r, i) => {
+    const tr = document.createElement('tr');
+    const th = r.thresholds || {};
+    tr.innerHTML = `
+      <td>${runs.length - i}</td>
+      <td>${r.prompt || '-'}</td>
+      <td>${(th.score_threshold_detection || 0).toFixed(2)}</td>
+      <td>${(th.new_det_thresh || 0).toFixed(2)}</td>
+      <td>${(th.det_nms_thresh || 0).toFixed(2)}</td>
+      <td><b>${r.num_unique_objs || '-'}</b></td>
+      <td>${r.avg_per_frame || '-'}</td>
+      <td>${r.elapsed_sec || '-'}s</td>
+      <td>${r.run_id ? `<a href="/api/download/${r.run_id}" target="_blank">DL</a>` : ''}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function setStatus(s) {
+  const badge = document.getElementById('statusBadge');
+  badge.textContent = s;
+  badge.className = `status-badge status-${s}`;
+  const runBtn = document.getElementById('runBtn');
+  const cancelBtn = document.getElementById('cancelBtn');
+  if (s === 'running') {
+    runBtn.disabled = true;
+    cancelBtn.style.display = 'inline-block';
+  } else {
+    runBtn.disabled = false;
+    cancelBtn.style.display = 'none';
+  }
+}
+
+// Run
+function startRun() {
+  const prompt = document.getElementById('promptInput').value.trim() || 'stack of poker chips';
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/ws/run`);
+
+  ws.onopen = () => {
+    setStatus('running');
+    document.getElementById('placeholder').style.display = 'none';
+    document.getElementById('frameImg').style.display = 'block';
+    ws.send(JSON.stringify({ prompt, thresholds: currentThresholds }));
+  };
+
+  ws.onmessage = (evt) => {
+    const data = JSON.parse(evt.data);
+    if (data.type === 'frame') {
+      document.getElementById('frameImg').src = 'data:image/jpeg;base64,' + data.jpeg_b64;
+      const pct = ((data.frame_index + 1) / data.total_frames * 100).toFixed(1);
+      document.getElementById('progressFill').style.width = pct + '%';
+      document.getElementById('frameInfo').textContent = `Frame ${data.frame_index + 1}/${data.total_frames}`;
+      document.getElementById('elapsedInfo').textContent = `${data.elapsed_sec}s`;
+      document.getElementById('resUnique').textContent = data.unique_so_far;
+      document.getElementById('resAvg').textContent = (data.frame_index > 0 ? (data.count).toFixed(0) : '-');
+      document.getElementById('resMax').textContent = '-';
+    } else if (data.type === 'done') {
+      const r = data.result;
+      document.getElementById('resUnique').textContent = r.num_unique_objs;
+      document.getElementById('resAvg').textContent = r.avg_per_frame;
+      document.getElementById('resMax').textContent = r.max_per_frame;
+      setStatus('idle');
+      loadHistory();
+    } else if (data.type === 'error') {
+      alert('Error: ' + data.message);
+      setStatus('idle');
+    }
+  };
+
+  ws.onclose = () => {
+    setStatus('idle');
+  };
+
+  ws.onerror = () => {
+    setStatus('idle');
+  };
+}
+
+function cancelRun() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'cancel' }));
+  }
+}
+
+// Init
+document.getElementById('runBtn').addEventListener('click', startRun);
+document.getElementById('cancelBtn').addEventListener('click', cancelRun);
+
+(async function init() {
+  await loadVideos();
+  await loadThresholds();
+  await loadHistory();
+  setStatus('idle');
+})();
+</script>
+</body>
+</html>
