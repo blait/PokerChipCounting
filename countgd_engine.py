@@ -13,63 +13,61 @@ Usage:
 """
 import sys
 import time
+import random
+import argparse
 
 import cv2
 import numpy as np
 import torch
 from PIL import Image
-from torchvision import transforms as T
 
 
 class CountGDEngine:
     def __init__(self, repo_path: str, checkpoint: str, device="cuda",
-                 bert_path: str = None, groundingdino_path: str = None):
+                 bert_path: str = None, config: str = None):
         self.device = device
         self.repo_path = repo_path
 
         if repo_path not in sys.path:
             sys.path.insert(0, repo_path)
 
-        self._build_model(checkpoint, bert_path, groundingdino_path)
+        self._build_model(checkpoint, bert_path, config)
         self._build_transform()
         print(f"[countgd] model ready on {device}", flush=True)
 
-    def _build_model(self, checkpoint, bert_path, groundingdino_path):
-        from models import build_model
+    def _build_model(self, checkpoint, bert_path, config):
         from util.slconfig import SLConfig
 
-        cfg_path = f"{self.repo_path}/config/cfg_fsc147_val.py"
+        cfg_path = config or f"{self.repo_path}/config/cfg_fsc147_vit_b.py"
         cfg = SLConfig.fromfile(cfg_path)
 
-        if bert_path:
-            cfg.text_encoder_type = bert_path
-        else:
-            cfg.text_encoder_type = f"{self.repo_path}/checkpoints/bert-base-uncased"
+        bert = bert_path or f"{self.repo_path}/checkpoints/bert-base-uncased"
+        cfg.merge_from_dict({"text_encoder_type": bert})
 
-        if groundingdino_path:
-            cfg.pretrain_model_path = groundingdino_path
+        cfg_dict = cfg._cfg_dict.to_dict()
+        args = argparse.Namespace(**cfg_dict)
+        args.device = self.device
 
-        cfg.device = self.device
-
-        self.model, _, _ = build_model(cfg)
+        from models.registry import MODULE_BUILD_FUNCS
+        build_func = MODULE_BUILD_FUNCS.get(args.modelname)
+        self.model, _, _ = build_func(args)
 
         ckpt_path = checkpoint if "/" in checkpoint else f"{self.repo_path}/{checkpoint}"
-        ckpt = torch.load(ckpt_path, map_location="cpu")
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         state_dict = ckpt["model"] if "model" in ckpt else ckpt
         self.model.load_state_dict(state_dict, strict=False)
         self.model.eval()
         self.model.to(self.device)
 
-        self.cfg = cfg
-
     def _build_transform(self):
-        self.normalize = T.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225],
-        )
-        self.transform = T.Compose([
+        import datasets_inference.transforms as T
+        normalize = T.Compose([
             T.ToTensor(),
-            self.normalize,
+            T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ])
+        self.transform = T.Compose([
+            T.RandomResize([800], max_size=1333),
+            normalize,
         ])
 
     def count(self, image_bgr: np.ndarray, prompt: str = "poker chip",
@@ -89,8 +87,11 @@ class CountGDEngine:
         image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
         pil_image = Image.fromarray(image_rgb)
 
-        w_orig, h_orig = pil_image.size
-        image_tensor = self.transform(pil_image).unsqueeze(0).to(self.device)
+        input_image, target = self.transform(
+            pil_image, {"exemplars": torch.tensor([])}
+        )
+        input_image = input_image.to(self.device)
+        input_exemplar = target["exemplars"].to(self.device)
 
         caption = prompt.strip()
         if not caption.endswith("."):
@@ -98,12 +99,14 @@ class CountGDEngine:
 
         with torch.no_grad():
             outputs = self.model(
-                image_tensor,
+                input_image.unsqueeze(0),
+                [input_exemplar],
+                [torch.tensor([0]).to(self.device)],
                 captions=[caption],
             )
 
-        logits = outputs["pred_logits"].sigmoid().squeeze(0)
-        boxes = outputs["pred_boxes"].squeeze(0)
+        logits = outputs["pred_logits"][0].sigmoid()
+        boxes = outputs["pred_boxes"][0]
 
         max_scores = logits.max(dim=-1)[0]
         mask = max_scores > box_threshold
