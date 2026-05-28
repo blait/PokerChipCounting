@@ -21,6 +21,7 @@ from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 import uvicorn
+import requests as http_requests
 
 from sam3_engine import SAM3Engine, TUNABLE_ATTRS
 
@@ -54,7 +55,31 @@ def parse_args():
                     help="Directory to scan for video files")
     ap.add_argument("--origin-secret", default="",
                     help="Secret header value for CloudFront origin verification")
+    ap.add_argument("--countgd-url", default="",
+                    help="CountGD server URL (e.g. http://34.207.102.234:8001)")
     return ap.parse_args()
+
+
+def call_countgd(jpeg_bytes, bboxes, countgd_url, prompt="poker chip",
+                 box_threshold=0.23):
+    """Call CountGD server to count chips in detected stack bboxes."""
+    b64 = base64.b64encode(jpeg_bytes).decode("ascii")
+    try:
+        resp = http_requests.post(
+            f"{countgd_url}/api/count-stacks",
+            json={
+                "image_b64": b64,
+                "stacks": bboxes,
+                "prompt": prompt,
+                "box_threshold": box_threshold,
+            },
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception:
+        pass
+    return None
 
 
 @asynccontextmanager
@@ -158,6 +183,9 @@ async def ws_run(websocket: WebSocket):
         msg = await websocket.receive_json()
         prompt = msg.get("prompt", "stack of poker chips")
         thresholds = msg.get("thresholds", {})
+        count_chips = msg.get("count_chips", False)
+        chip_prompt = msg.get("chip_prompt", "poker chip")
+        chip_threshold = msg.get("chip_threshold", 0.23)
 
         if thresholds:
             valid = {k: v for k, v in thresholds.items() if k in TUNABLE_ATTRS}
@@ -234,7 +262,7 @@ async def ws_run(websocket: WebSocket):
                 else:
                     state["frame"] = item["frame_index"]
                     jpeg_b64 = base64.b64encode(item["jpeg_bytes"]).decode("ascii")
-                    await websocket.send_json({
+                    frame_msg = {
                         "type": "frame",
                         "frame_index": item["frame_index"],
                         "total_frames": item["total_frames"],
@@ -242,7 +270,25 @@ async def ws_run(websocket: WebSocket):
                         "unique_so_far": item["unique_so_far"],
                         "elapsed_sec": item["elapsed_sec"],
                         "jpeg_b64": jpeg_b64,
-                    })
+                    }
+
+                    if (count_chips and args.countgd_url
+                            and item.get("bboxes")
+                            and item["frame_index"] % 5 == 0):
+                        cgd = call_countgd(
+                            item["raw_jpeg_bytes"], item["bboxes"],
+                            args.countgd_url, prompt=chip_prompt,
+                            box_threshold=chip_threshold,
+                        )
+                        if cgd:
+                            frame_msg["chip_counts"] = [
+                                s.get("count", 0)
+                                for s in cgd.get("stacks", [])
+                            ]
+                            frame_msg["total_chips"] = cgd.get(
+                                "total_chips", 0)
+
+                    await websocket.send_json(frame_msg)
 
             except WebSocketDisconnect:
                 cancel_requested = True

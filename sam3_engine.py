@@ -259,6 +259,7 @@ class SAM3Engine:
             masks = outputs.get("out_binary_masks")
             probs = outputs.get("out_probs")
             n = 0
+            frame_bboxes = []
 
             if obj_ids is not None:
                 ids = obj_ids.tolist() if hasattr(obj_ids, "tolist") else list(obj_ids)
@@ -288,6 +289,7 @@ class SAM3Engine:
                     ys, xs = np.where(m)
                     x0, y0 = int(xs.min()), int(ys.min())
                     x1, y1 = int(xs.max()), int(ys.max())
+                    frame_bboxes.append([x0, y0, x1, y1])
                     cv2.rectangle(draw, (x0, y0), (x1, y1), color, 2)
                     label = f"id{oid}"
                     if probs is not None and idx < len(probs):
@@ -304,13 +306,16 @@ class SAM3Engine:
             per_frame_counts[fi] = n
 
             _, jpeg = cv2.imencode('.jpg', draw, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            _, raw_jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
             yield {
                 "frame_index": fi,
                 "total_frames": len(self.frames),
                 "count": n,
                 "unique_so_far": len(seen_ids),
                 "jpeg_bytes": jpeg.tobytes(),
+                "raw_jpeg_bytes": raw_jpeg.tobytes(),
                 "elapsed_sec": round(time.time() - t0, 1),
+                "bboxes": frame_bboxes,
             }
 
         if vw:

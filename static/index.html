@@ -73,6 +73,9 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14p
       <div class="controls-row">
         <select id="videoSelect"></select>
         <input type="text" id="promptInput" value="stack of poker chips" placeholder="Prompt...">
+        <label style="display:flex;align-items:center;gap:4px;font-size:0.8em;color:#ccc;cursor:pointer;">
+          <input type="checkbox" id="countChipsToggle"> Count Chips
+        </label>
         <button class="btn btn-run" id="runBtn" disabled>Run</button>
         <button class="btn btn-cancel" id="cancelBtn" style="display:none">Cancel</button>
       </div>
@@ -93,7 +96,8 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14p
     <div class="card">
       <h2>Results</h2>
       <div class="results-grid">
-        <div class="result-item"><div class="value" id="resUnique">-</div><div class="label">Unique Objects</div></div>
+        <div class="result-item"><div class="value" id="resUnique">-</div><div class="label">Unique Stacks</div></div>
+        <div class="result-item"><div class="value" id="resTotalChips">-</div><div class="label">Total Chips</div></div>
         <div class="result-item"><div class="value" id="resAvg">-</div><div class="label">Avg/Frame</div></div>
         <div class="result-item"><div class="value" id="resMax">-</div><div class="label">Max/Frame</div></div>
       </div>
@@ -109,6 +113,13 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14p
   </div>
 
   <div class="sidebar">
+    <div class="card">
+      <h2>CountGD (Chip Counting)</h2>
+      <div class="slider-group">
+        <div class="slider-label"><span>Box Threshold</span><span id="val_box_threshold">0.23</span></div>
+        <input type="range" id="sl_box_threshold" min="0.05" max="0.50" step="0.01" value="0.23">
+      </div>
+    </div>
     <div class="card">
       <h2>Thresholds</h2>
       <div id="slidersContainer"></div>
@@ -256,7 +267,15 @@ function startRun() {
     setStatus('running');
     document.getElementById('placeholder').style.display = 'none';
     document.getElementById('frameImg').style.display = 'block';
-    ws.send(JSON.stringify({ prompt, thresholds: currentThresholds }));
+    const countChips = document.getElementById('countChipsToggle').checked;
+    ws.send(JSON.stringify({
+      prompt,
+      thresholds: currentThresholds,
+      count_chips: countChips,
+      chip_prompt: "poker chip",
+      chip_threshold: parseFloat(document.getElementById('sl_box_threshold') ?
+        document.getElementById('sl_box_threshold').value : 0.23),
+    }));
   };
 
   ws.onmessage = (evt) => {
@@ -270,11 +289,17 @@ function startRun() {
       document.getElementById('resUnique').textContent = data.unique_so_far;
       document.getElementById('resAvg').textContent = (data.frame_index > 0 ? (data.count).toFixed(0) : '-');
       document.getElementById('resMax').textContent = '-';
+      if (data.total_chips !== undefined) {
+        document.getElementById('resTotalChips').textContent = data.total_chips;
+      }
     } else if (data.type === 'done') {
       const r = data.result;
       document.getElementById('resUnique').textContent = r.num_unique_objs;
       document.getElementById('resAvg').textContent = r.avg_per_frame;
       document.getElementById('resMax').textContent = r.max_per_frame;
+      if (r.total_chips !== undefined) {
+        document.getElementById('resTotalChips').textContent = r.total_chips;
+      }
       setStatus('idle');
       loadHistory();
     } else if (data.type === 'error') {
@@ -297,6 +322,11 @@ function cancelRun() {
     ws.send(JSON.stringify({ type: 'cancel' }));
   }
 }
+
+// CountGD box threshold slider
+document.getElementById('sl_box_threshold').addEventListener('input', function() {
+  document.getElementById('val_box_threshold').textContent = parseFloat(this.value).toFixed(2);
+});
 
 // Init
 document.getElementById('runBtn').addEventListener('click', startRun);
