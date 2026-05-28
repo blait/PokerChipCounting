@@ -376,15 +376,104 @@ aws ec2 start-instances --instance-ids i-xxxxxxxxx --region us-east-1
 
 ---
 
+## CountGD — 개별 칩 카운팅 (별도 서버)
+
+SAM3가 **스택 단위**로 감지하는 반면, CountGD는 각 스택 내 **개별 칩 수**를 센다.
+두 서버는 완전 독립적으로 운영되므로, 기존 SAM3 인프라에 영향 없음.
+
+### Architecture
+
+```
+[SAM3 Server :8000]         [CountGD Server :8001]
+  스택 감지/추적              개별 칩 카운팅
+  (기존 EC2 유지)            (별도 EC2 인스턴스)
+         │                          │
+         └── SAM3 결과(bbox) ──────►┘  (또는 독립 사용)
+```
+
+### CountGD 서버 설치
+
+```bash
+# 별도 GPU 인스턴스에서:
+chmod +x setup_countgd.sh
+./setup_countgd.sh
+```
+
+체크포인트 수동 다운로드가 필요할 수 있음:
+- [CountGD checkpoints (Google Drive)](https://drive.google.com/drive/folders/1zXXhm3XH5S2VD2_LgQ8UJfPHnJlm0YhE)
+
+### CountGD 서버 실행
+
+```bash
+cd /tmp
+cp ~/chipcounting/countgd_engine.py ~/chipcounting/countgd_server.py /tmp/
+mkdir -p /tmp/countgd_static
+cp ~/chipcounting/static/countgd.html /tmp/countgd_static/
+python3 countgd_server.py \
+    --countgd-repo /home/ubuntu/CountGD \
+    --checkpoint /home/ubuntu/CountGD/checkpoints/checkpoint_fsc147_best.pth \
+    --port 8001
+```
+
+### API
+
+| Endpoint | Method | 설명 |
+|----------|--------|------|
+| `/api/count` | POST (multipart) | 단일 이미지 칩 카운팅 |
+| `/api/count-stacks` | POST (JSON) | SAM3 bbox 결과로 스택별 카운팅 |
+| `/ws/count-video` | WebSocket | 실시간 프레임 카운팅 |
+| `/health` | GET | 헬스체크 |
+
+**Single image:**
+```bash
+curl -X POST http://localhost:8001/api/count \
+  -F "file=@chip_stack.jpg" \
+  -F "prompt=poker chip" \
+  -F "box_threshold=0.23"
+```
+
+**SAM3 stacks:**
+```bash
+curl -X POST http://localhost:8001/api/count-stacks \
+  -H "Content-Type: application/json" \
+  -d '{"image_b64": "...", "stacks": [[100,50,300,400],[350,50,550,400]], "prompt": "poker chip"}'
+```
+
+### 파이프라인 연동 (SAM3 → CountGD)
+
+SAM3 실행 결과의 bbox를 CountGD `/api/count-stacks`로 전달:
+
+```python
+import requests, base64, cv2
+
+# SAM3 결과에서 스택 bbox 추출 후
+frame = cv2.imread("frame.jpg")
+_, buf = cv2.imencode('.jpg', frame)
+b64 = base64.b64encode(buf).decode()
+
+resp = requests.post("http://<countgd-server>:8001/api/count-stacks", json={
+    "image_b64": b64,
+    "stacks": [[100, 50, 300, 400], [350, 50, 550, 400]],
+    "prompt": "poker chip",
+    "box_threshold": 0.23,
+})
+print(resp.json())
+# {"total_chips": 24, "stacks": [{"count": 12, ...}, {"count": 12, ...}]}
+```
+
+---
+
 ## 향후 계획
 
-- [ ] **CountGD** 통합: 감지된 각 뭉치(stack) 내 개별 칩 카운팅
+- [x] **CountGD** 통합: 감지된 각 뭉치(stack) 내 개별 칩 카운팅
 - [ ] **색상 분류**: 칩 색상별 금액 매핑
 - [ ] **겹친 스택 문제 개선**: `det_nms_thresh`, `image_size` 튜닝
 - [ ] **실시간 처리**: 라이브 카메라 입력 지원
+- [ ] **SAM3↔CountGD 자동 연동**: 파이프라인 오케스트레이터
 
 ---
 
 ## License
 
 This project uses [SAM3](https://github.com/facebookresearch/sam3) by Meta AI (Apache 2.0 License).
+CountGD by Visual Geometry Group, Oxford (NeurIPS 2024).
