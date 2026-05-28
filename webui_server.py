@@ -16,18 +16,33 @@ from contextlib import asynccontextmanager
 
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 import uvicorn
 
 from sam3_engine import SAM3Engine, TUNABLE_ATTRS
+
+ORIGIN_SECRET = os.environ.get("ORIGIN_SECRET", "")
 
 engine: SAM3Engine = None
 state = {"status": "loading", "frame": 0, "total": 0}
 run_history = []
 runs_dir = "/tmp/chipcounting_runs"
 args = None
+
+
+class OriginVerifyMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if not ORIGIN_SECRET:
+            return await call_next(request)
+        if request.url.path == "/health":
+            return await call_next(request)
+        header_val = request.headers.get("x-origin-verify", "")
+        if header_val != ORIGIN_SECRET:
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        return await call_next(request)
 
 
 def parse_args():
@@ -37,13 +52,17 @@ def parse_args():
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--video-dir", default="/home/ubuntu",
                     help="Directory to scan for video files")
+    ap.add_argument("--origin-secret", default="",
+                    help="Secret header value for CloudFront origin verification")
     return ap.parse_args()
 
 
 @asynccontextmanager
 async def lifespan(app):
-    global engine, state, args
+    global engine, state, args, ORIGIN_SECRET
     args = parse_args()
+    if args.origin_secret:
+        ORIGIN_SECRET = args.origin_secret
     os.makedirs(runs_dir, exist_ok=True)
     os.makedirs("/tmp/static", exist_ok=True)
     engine = SAM3Engine(video_path=args.video)
@@ -52,7 +71,13 @@ async def lifespan(app):
 
 
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(OriginVerifyMiddleware)
 app.mount("/static", StaticFiles(directory="/tmp/static"), name="static")
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 
 @app.get("/")
@@ -117,6 +142,11 @@ async def download_overlay(run_id: str):
 
 @app.websocket("/ws/run")
 async def ws_run(websocket: WebSocket):
+    if ORIGIN_SECRET:
+        header_val = websocket.headers.get("x-origin-verify", "")
+        if header_val != ORIGIN_SECRET:
+            await websocket.close(code=4003, reason="forbidden")
+            return
     await websocket.accept()
 
     if state["status"] == "running":
